@@ -26,6 +26,65 @@ const BASE =
 const SAFE_NUMBER_RE = /^[A-Za-z0-9 -]+$/;
 
 // ---------------------------------------------------------------------------
+// Carrier tracking-page URLs (official, public pages — NOT scraping).
+// Verified: 2026-06-24. Update this single map if a carrier changes its URL.
+//
+// Each value is a function that receives the REAL (un-masked) tracking number
+// the user typed and returns the URL to that carrier's tracking page. When a
+// carrier's public page does NOT accept the number as a URL parameter, the
+// function simply returns the carrier's tracking homepage (the user pastes the
+// number there). This is legitimate: these are official pages and the number is
+// the user's own input (kept client-side only — never sent to our logs/DB).
+// ---------------------------------------------------------------------------
+const CARRIER_TRACK_URLS = Object.freeze({
+  // Thailand Post: the Thai tracking page does not document a query param for
+  // prefill, so we link to the homepage (user pastes the number).
+  thailand_post: (_num) => 'https://track.thailandpost.co.th/',
+
+  // DHL Express: Thai/EN tracking page. The site is a JS app; we pass the
+  // number via the `tracking-id` query param (best-effort prefill — it opens
+  // the tracking page either way).
+  dhl_express: (num) =>
+    `https://www.dhl.com/th-en/home/tracking.html?tracking-id=${encodeURIComponent(num)}`,
+
+  // FedEx: community-verified `trknbr` query param (widely used; opens the
+  // result page directly when the number is valid).
+  fedex_express: (num) =>
+    `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(num)}`,
+
+  // UPS: official `tracknum` query param on the UPS track page.
+  ups_express: (num) =>
+    `https://www.ups.com/track?loc=en_US&tracknum=${encodeURIComponent(num)}&requester=ST/trackdetails`,
+
+  // Aramex: the public tracking page does not document a query param for
+  // prefill, so we link to the homepage (user pastes the number).
+  aramex_express: (_num) => 'https://www.aramex.com/th/en/track/shipments',
+
+  // SF Express: the public list page does not accept the number as a query
+  // param, so we link to the homepage (user pastes the waybill number).
+  sf_express: (_num) => 'https://www.sf-express.com/chn/en/waybill/list',
+});
+
+// Thai display labels for the undetected-carrier picker (mirrors
+// server/contracts.js CARRIER_NAMES.th). Kept here so the frontend is
+// self-contained (it does not import server modules).
+const CARRIER_LABELS_TH = Object.freeze({
+  thailand_post: 'ไปรษณีย์ไทย',
+  dhl_express: 'DHL Express',
+  fedex_express: 'FedEx Express',
+  ups_express: 'UPS Express',
+  aramex_express: 'Aramex Express',
+  sf_express: 'SF Express',
+});
+
+// Small external-link icon (inline SVG — no CDN). Used in the carrier button.
+const EXTERNAL_LINK_SVG =
+  '<svg class="ext-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">' +
+  '<path fill="currentColor" d="M14 3a1 1 0 0 0 0 2h3.59l-9.3 9.29a1 1 0 1 0 1.42 1.42L19 6.41V10a1 1 0 1 0 2 0V4a1 1 0 0 0-1-1h-6z"/>' +
+  '<path fill="currentColor" d="M5 5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 1 0-2 0v5H5V7h5a1 1 0 0 0 0-2H5z"/>' +
+  '</svg>';
+
+// ---------------------------------------------------------------------------
 // DOM references
 // ---------------------------------------------------------------------------
 const form = document.getElementById('tracking-form');
@@ -143,15 +202,38 @@ function validateInput(numbers) {
 // Result rendering
 // ---------------------------------------------------------------------------
 
-/** Build the HTML for one tracking result card. */
-function renderResultCard(result) {
+/**
+ * Build the HTML for one tracking result card.
+ *
+ * @param {object} result - one result object from the API response
+ * @param {number} index - position in the results array (matches the order of
+ *   the original tracking_numbers the frontend sent, so we can recover the
+ *   REAL — un-masked — number for building a carrier tracking link).
+ * @param {string[]} originalNumbers - the original (un-masked) tracking numbers
+ *   parsed from the textarea, in send order.
+ */
+function renderResultCard(result, index, originalNumbers) {
   const category = result.status_category || 'unknown';
-  const carrierName = result.carrier_name || '—';
+  // carrier_name is either { en, th } or null (per server/contracts.js). Pick a
+  // readable display string (prefer Thai), and also keep the raw object for the
+  // carrier button below.
+  const carrierNameObj =
+    result.carrier_name && typeof result.carrier_name === 'object'
+      ? result.carrier_name
+      : null;
+  const carrierName = (carrierNameObj && (carrierNameObj.th || carrierNameObj.en)) || '—';
   const carrierCode = result.carrier_code || '—';
   const statusThai = result.status_text_thai || result.status_text_original || '—';
   const lastUpdate = formatTime(result.last_update_time);
   const provider = result.provider_used ? esc(result.provider_used) : '';
   const hasError = !!result.error;
+
+  // Recover the real (un-masked) number for this card by index. This number is
+  // the user's own input, stays client-side, and is never sent to our logs/DB.
+  const realNumber =
+    originalNumbers && index < originalNumbers.length
+      ? originalNumbers[index]
+      : '';
 
   // Class modifiers
   const cardModifierClass = (() => {
@@ -174,6 +256,62 @@ function renderResultCard(result) {
   const errorBlock = hasError && category !== 'provider_not_configured'
     ? `<div class="result-card__error">⚠️ ${esc(result.error)}</div>`
     : '';
+
+  // ---- "Track on carrier website" fallback button ----
+  // Show when a carrier was detected (carrier_code is a real carrier, not null)
+  // AND the API could not give a real status (provider_not_configured / unknown).
+  // The carrier_name object has { en, th }; fall back to the code label if absent.
+  const detectedCarrier = CARRIER_TRACK_URLS[carrierCode];
+  const showCarrierButton =
+    detectedCarrier &&
+    carrierCode !== 'auto_unknown' &&
+    realNumber &&
+    (category === 'provider_not_configured' || category === 'unknown');
+
+  let carrierButtonHtml = '';
+  if (showCarrierButton) {
+    // Prefer the Thai display name; fall back to the (string) carrier_name,
+    // then to the carrier code. Keep the raw string here — it gets escaped
+    // once in the template literal below.
+    const carrierTh =
+      (carrierNameObj && carrierNameObj.th) ||
+      (carrierNameObj && carrierNameObj.en) ||
+      carrierName ||
+      carrierCode;
+    const trackUrl = detectedCarrier(realNumber);
+    carrierButtonHtml = `
+      <div class="carrier-link">
+        <a class="carrier-link__btn" href="${esc(trackUrl)}" target="_blank" rel="noopener noreferrer">
+          เปิดหน้าติดตามของ ${esc(carrierTh)}
+          ${EXTERNAL_LINK_SVG}
+        </a>
+        <p class="carrier-link__hint">ระบบยังไม่ได้เชื่อม API — กดปุ่มเพื่อตรวจสอบบนเว็บของขนส่งโดยตรง</p>
+      </div>`;
+  }
+
+  // ---- Undetected carrier: offer ALL carrier homepages so the user can pick ----
+  // Shown only for the truly undetected case (carrier_code null/auto_unknown),
+  // in addition to the existing gentle hint. No real number is embedded here —
+  // these are plain links to each carrier's tracking homepage.
+  let allCarriersHtml = '';
+  const isUndetected =
+    (!carrierCode || carrierCode === 'auto_unknown' || carrierCode === '—') &&
+    category === 'unknown';
+  if (isUndetected) {
+    const links = Object.keys(CARRIER_TRACK_URLS)
+      .map((code) => {
+        const url = CARRIER_TRACK_URLS[code](''); // homepage (number-independent for these)
+        // Friendly Thai labels mirror server/contracts.js CARRIER_NAMES.th
+        const label = CARRIER_LABELS_TH[code] || code;
+        return `<a class="carrier-link__chip" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ${EXTERNAL_LINK_SVG}</a>`;
+      })
+      .join('');
+    allCarriersHtml = `
+      <div class="carrier-link carrier-link--picker">
+        <p class="carrier-link__hint">หรือเปิดหน้าติดตามของขนส่งที่ท่านคิดว่าน่าจะใช้:</p>
+        <div class="carrier-link__chips">${links}</div>
+      </div>`;
+  }
 
   // Timeline (reverse chronological — API may already be newest-first,
   // but we force newest-first defensively).
@@ -210,6 +348,8 @@ function renderResultCard(result) {
       ${provider ? `<div class="result-card__meta">แหล่งข้อมูล: <strong>${provider}</strong></div>` : ''}
       ${infoNote}
       ${hintNote}
+      ${carrierButtonHtml}
+      ${allCarriersHtml}
       ${errorBlock}
       ${timelineHtml}
     </article>`;
@@ -271,7 +411,12 @@ async function handleSubmit(event) {
   setLoading(true);
   try {
     const results = await callTrackApi(numbers, carrierEl.value);
-    resultsEl.innerHTML = results.map(renderResultCard).join('');
+    // `numbers` holds the ORIGINAL (un-masked) tracking numbers in send order.
+    // The API returns results in the same order, so each result's index maps
+    // back to its real number — used to build the carrier tracking link.
+    resultsEl.innerHTML = results
+      .map((r, i) => renderResultCard(r, i, numbers))
+      .join('');
     if (results.length === 0) {
       resultsEl.innerHTML =
         '<div class="result-card result-card--unknown"><div class="result-card__status">ไม่พบผลลัพธ์</div></div>';
