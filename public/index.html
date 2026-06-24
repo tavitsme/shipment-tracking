@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Prototype guard: do NOT index this demo -->
+  <meta name="robots" content="noindex, nofollow" />
+
+  <!-- API base path. The VPS serves the app under /tracking.
+       In local dev this meta is ignored (BASE falls back to ''). -->
+  <meta name="api-base" content="/tracking" />
+
+  <title>Shipment Tracking Prototype</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="page">
+    <!-- ============================ HEADER ============================ -->
+    <header class="hero">
+      <h1 class="hero__title">Shipment Tracking Prototype</h1>
+      <p class="hero__subtitle">Enter up to 10 tracking numbers to test shipment tracking.</p>
+      <p class="hero__subtitle hero__subtitle--th">กรอกหมายเลขพัสดุได้สูงสุด 10 หมายเลข</p>
+    </header>
+
+    <!-- ============================ FORM ============================ -->
+    <section class="card form-card" aria-label="Tracking form">
+      <form id="tracking-form" novalidate>
+        <!-- Tracking numbers -->
+        <div class="field">
+          <div class="field__head">
+            <label for="tracking-input" class="field__label">
+              หมายเลขพัสดุ <span class="field__label-en">(Tracking numbers)</span>
+            </label>
+            <span id="counter" class="counter" aria-live="polite">0 / 10</span>
+          </div>
+          <textarea
+            id="tracking-input"
+            class="textarea"
+            rows="6"
+            inputmode="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="หมายเลขละบรรทัด&#10;1234567890&#10;1Z999AA10123456784"></textarea>
+          <p class="field__hint">หมายเลขละบรรทัด · รองรับตัวอักษร ตัวเลข ช่องว่าง และขีดกลาง</p>
+        </div>
+
+        <!-- Carrier select -->
+        <div class="field">
+          <label for="carrier-select" class="field__label">
+            บริษัทขนส่ง <span class="field__label-en">(Carrier)</span>
+          </label>
+          <select id="carrier-select" class="select">
+            <option value="auto" selected>Auto detect / ไม่แน่ใจ</option>
+            <option value="thailand_post">ไปรษณีย์ไทย</option>
+            <option value="dhl_express">DHL Express</option>
+            <option value="fedex_express">FedEx Express</option>
+            <option value="ups_express">UPS Express</option>
+            <option value="aramex_express">Aramex Express</option>
+            <option value="sf_express">SF Express</option>
+          </select>
+        </div>
+
+        <!-- Inline validation message -->
+        <p id="form-error" class="form-error" role="alert" hidden></p>
+
+        <!-- Submit -->
+        <button id="submit-btn" type="submit" class="btn btn--primary">
+          <span class="btn__label">เริ่มติดตาม · Start Tracking</span>
+          <span class="btn__spinner" hidden>กำลังติดตาม...</span>
+        </button>
+      </form>
+    </section>
+
+    <!-- ============================ RESULTS ============================ -->
+    <section id="results" class="results" aria-live="polite" aria-atomic="false"></section>
+
+    <!-- Global error banner (network / fetch failures) -->
+    <div id="global-error" class="global-error" role="alert" hidden></div>
+
+    <footer class="footer">
+      <p>Prototype · ระบบสาธิต · ไม่มีการเก็บข้อมูลส่วนบุคคลในเพจนี้</p>
+    </footer>
+  </main>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

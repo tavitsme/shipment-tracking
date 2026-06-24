@@ -1,0 +1,94 @@
+# ===========================================================================
+# Shipment Tracking System — production compose (VPS deploy)
+#
+# Two services:
+#   app       — Express app (listens on 8080 inside the container)
+#   postgres  — isolated PostgreSQL 16
+#
+# Networking:
+#   app       joins TWO networks:
+#               - tracking_internal   (to reach postgres)
+#               - ${TRAEFIK_NETWORK}  (EXTERNAL; the existing Traefik, owned by
+#                                      the n8n project, reaches app:8080 here)
+#   postgres  joins ONLY tracking_internal (never exposed to Traefik).
+#
+# TRAEFIK_NETWORK MUST be set in .env on the VPS (e.g. n8n_default).
+# Locally (without Traefik) use:  docker compose up -d postgres  +  npm run dev
+# ===========================================================================
+name: tracking
+
+services:
+  app:
+    build: .
+    image: tracking-app:latest
+    container_name: tracking_app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      BASE_PATH: /tracking
+      DATABASE_URL: postgres://tracking_user:${POSTGRES_PASSWORD}@postgres:5432/tracking_db
+      TRACKING_HASH_SALT: ${TRACKING_HASH_SALT}
+      # Carrier credentials — optional in the prototype; default to empty.
+      THAILAND_POST_API_TOKEN: ${THAILAND_POST_API_TOKEN:-}
+      DHL_API_KEY: ${DHL_API_KEY:-}
+      DHL_API_SECRET: ${DHL_API_SECRET:-}
+      FEDEX_CLIENT_ID: ${FEDEX_CLIENT_ID:-}
+      FEDEX_CLIENT_SECRET: ${FEDEX_CLIENT_SECRET:-}
+      UPS_CLIENT_ID: ${UPS_CLIENT_ID:-}
+      UPS_CLIENT_SECRET: ${UPS_CLIENT_SECRET:-}
+      ARAMEX_USERNAME: ${ARAMEX_USERNAME:-}
+      ARAMEX_PASSWORD: ${ARAMEX_PASSWORD:-}
+      ARAMEX_ACCOUNT_NUMBER: ${ARAMEX_ACCOUNT_NUMBER:-}
+      ARAMEX_ACCOUNT_PIN: ${ARAMEX_ACCOUNT_PIN:-}
+      SF_EXPRESS_CLIENT_CODE: ${SF_EXPRESS_CLIENT_CODE:-}
+      SF_EXPRESS_CHECKWORD: ${SF_EXPRESS_CHECKWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"   # reachable only on the docker networks; NOT published to host
+    networks:
+      - tracking_internal
+      - ${TRAEFIK_NETWORK}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
+      # Backtick parens are LITERAL — whole value wrapped in double quotes.
+      - "traefik.http.routers.tracking.rule=Host(`vitchy.com`) && PathPrefix(`/tracking`)"
+      - "traefik.http.routers.tracking.entrypoints=web,websecure"
+      - "traefik.http.routers.tracking.tls=true"
+      - "traefik.http.routers.tracking.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.tracking.loadbalancer.server.port=8080"
+      - "traefik.http.routers.tracking.middlewares=tracking-sts"
+      - "traefik.http.middlewares.tracking-sts.headers.stsseconds=31536000"
+      - "traefik.http.middlewares.tracking-sts.headers.stspreload=true"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tracking_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - tracking_pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT}:5432"   # host 5433 -> container 5432 (optional admin access)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tracking_internal   # postgres NOT on the traefik network
+
+networks:
+  tracking_internal:
+    driver: bridge
+  ${TRAEFIK_NETWORK}:
+    external: true
+
+volumes:
+  tracking_pgdata: {}
