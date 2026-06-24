@@ -105,6 +105,11 @@ async function boot() {
 
   const mainApp = express();
 
+  // Trust the single Traefik reverse-proxy hop so req.ip / X-Forwarded-For are
+  // honored (rate-limit keying + client_ip_hash). Without this, express-rate-limit
+  // emits ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and keys everyone as the same IP.
+  mainApp.set('trust proxy', 1);
+
   // Security + observability on the main app (applies to every mount).
   mainApp.use(helmet());
   mainApp.use(morgan('combined')); // no body logging — morgan never sees req.body
